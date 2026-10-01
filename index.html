@@ -61,8 +61,12 @@ img{display:block;max-width:100%}
 
 /* ---------- STAGE ---------- */
 .stage{position:fixed;inset:0;overflow:hidden}
-.scene{position:absolute;inset:0;overflow:hidden;visibility:hidden;will-change:clip-path,opacity,transform;pointer-events:none}
+.scene{position:absolute;inset:0;overflow:hidden;visibility:hidden;pointer-events:none}
 .scene.live{visibility:visible}
+.scene.live,.scene.live>.shift{will-change:transform}
+.shift{position:absolute;inset:0}
+.scene.circ{border-radius:50%}
+.scene.circ>.shift{transform-origin:50% 100%}
 .scene.active{pointer-events:auto}
 .inner{position:absolute;inset:0;padding:calc(env(safe-area-inset-top,0px) + 28px) 24px calc(env(safe-area-inset-bottom,0px) + 28px);display:flex;align-items:center;justify-content:center;will-change:transform,opacity}
 .snaps{position:relative;z-index:-1}
@@ -291,11 +295,25 @@ img{display:block;max-width:100%}
   const ease=t=>t<.5?4*t*t*t:1-Math.pow(-2*t+2,3)/2;
   const scenes=[...document.querySelectorAll('.scene')];
   const T=0.85; // length of each blend, in screens
+  const smooth=!reduce&&matchMedia('(pointer: fine)').matches; // touch scrolling is already smooth
+  const stage=$('stage');
   let starts=[],total=0,H=innerHeight,cur=scrollY,sigW=[];
+
+  // every scene moves as a whole while its content is moved back the other way, so the
+  // reveal is pure transforms (composited) instead of a clip-path repainted every frame
+  scenes.forEach(s=>{const w=document.createElement('div');w.className='shift';w.append(...s.childNodes);s.append(w);s.shift=w;
+    if(s.dataset.in==='circle')s.classList.add('circ')});
+  // the circle scenes are a big round window centred on the bottom middle of the screen
+  function geom(){
+    const W=stage.clientWidth,h=stage.clientHeight,R=1.5*Math.sqrt((W*W+h*h)/2);
+    scenes.forEach(s=>{if(!s.classList.contains('circ'))return;
+      s.style.cssText+=';inset:auto;left:'+(W/2-R)+'px;top:'+(h-R)+'px;width:'+2*R+'px;height:'+2*R+'px';
+      s.shift.style.cssText+=';inset:auto;left:'+(R-W/2)+'px;top:'+(R-h)+'px;width:'+W+'px;height:'+h+'px'});
+  }
 
   // layout: each scene gets a window; blends happen as the next scene arrives
   function layout(){
-    H=innerHeight; starts=[]; let acc=0;
+    H=innerHeight; starts=[]; let acc=0; geom();
     sigW=[$('sigR').offsetWidth,$('sigM').offsetWidth];
     scenes.forEach((s,i)=>{starts.push(acc); acc+=parseFloat(s.dataset.len);});
     total=acc-parseFloat(scenes[scenes.length-1].dataset.len)+1;
@@ -319,12 +337,12 @@ img{display:block;max-width:100%}
   function enter(s,e){
     // e: 0 (not arrived) -> 1 (fully in)
     const k=ease(e), type=s.dataset.in;
-    if(reduce){s.style.opacity=e>0.5?1:0;s.style.clipPath='none';return}
-    s.style.opacity=1;s.style.transform='none';
-    if(type==='circle'){s.style.clipPath='circle('+(k*150)+'% at 50% 100%)'}
-    else if(type==='wipe'){s.style.clipPath='inset('+((1-k)*100)+'% 0 0 0)'}
-    else if(type==='rise'){s.style.clipPath='inset('+((1-k)*100)+'% 0 0 0 round '+(1-k)*40+'px '+(1-k)*40+'px 0 0)'}
-    else{s.style.clipPath='none';s.style.opacity=k}
+    if(reduce){s.style.opacity=e>0.5?1:0;return}
+    s.style.opacity=1;
+    if(type==='circle'){const c=Math.max(k,.01);s.style.transform='scale('+c+')';s.shift.style.transform='scale('+1/c+')'}
+    else if(type==='wipe'||type==='rise'){const y=(1-k)*100;s.style.transform='translateY('+y+'%)';s.shift.style.transform='translateY('+(-y)+'%)';
+      if(type==='rise')s.style.borderRadius=k<1?'40px 40px 0 0':'0'}
+    else{s.style.opacity=k}
   }
   function leave(s,x){
     // x: 0 (still) -> 1 (fully covered by next)
@@ -374,12 +392,15 @@ img{display:block;max-width:100%}
   function frame(now){
     const dt=last?Math.min(now-last,64):16.67; last=now;
     const d=scrollY-cur;
-    if(reduce||Math.abs(d)<0.5){cur=scrollY;raf=0;last=0}
+    if(!smooth||Math.abs(d)<0.5){cur=scrollY;raf=0;last=0}
     else{cur+=d*(1-Math.pow(1-0.16,dt/16.67));raf=requestAnimationFrame(frame)}
     render();
   }
   addEventListener('scroll',()=>{if(!raf)raf=requestAnimationFrame(frame)},{passive:true});
-  addEventListener('resize',layout);
+  // phone browsers resize the viewport as their toolbars slide in and out (e.g. when scrolling
+  // back up); only re-measure the scroll track for real changes so the scenes don't jump
+  let lastW=innerWidth;
+  addEventListener('resize',()=>{if(innerWidth!==lastW||Math.abs(innerHeight-H)>160){lastW=innerWidth;layout()}else{geom();render()}});
   layout();
   if(document.fonts)document.fonts.ready.then(layout);
 
